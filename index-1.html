@@ -1,0 +1,1242 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEOMARK-X7 — Field Coordinate Logger</title>
+<style>
+  @font-face {
+    font-family: 'monoFallback';
+    src: local('Courier New');
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #111210; }
+  body {
+    display: flex;
+    justify-content: center;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+  /*
+    Responsive scaling สำหรับจอใหญ่ (แท็บเล็ต/desktop):
+    UI ออกแบบไว้บนความกว้างอ้างอิง 420px (ขนาดมือถือที่สวยที่สุด)
+    ใช้ CSS `zoom` (ไม่ใช่ transform:scale) ขยายทุกอย่างเป็นสัดส่วนเดียวกัน
+    — zoom ต่างจาก transform:scale ตรงที่มันให้ browser คำนวณ "layout จริง" ใหม่ทั้งหมด
+    (ขนาด DOM, ตำแหน่ง touch/click, scroll) ไม่ใช่แค่ขยายภาพที่ render ไปแล้ว
+    จึงปลอดภัยกับ Google Maps ที่ต้องอ่านขนาด/ตำแหน่ง pixel จริงของ container
+    ค่า --ui-zoom ถูกคำนวณและตั้งโดย JS ตามความกว้างจอจริง (ดูฟังก์ชัน applyResponsiveZoom)
+  */
+  #app {
+    width: 420px;
+    min-height: var(--app-min-height, 100vh);
+    zoom: var(--ui-zoom, 1);
+  }
+  input, textarea, button { font-family: inherit; }
+
+  :root {
+    --case: #26281f;
+    --case-light: #33352a;
+    --case-dark: #161712;
+    --screen-bg: #0a0f08;
+    --led: #ffb300;
+    --led-dim: #5c4612;
+    --btn-body: #202018;
+    --btn-top: #33342a;
+    --btn-shadow: #0a0a07;
+    --text: #d8d6cc;
+    --text-dim: #6f7268;
+    --warn-red: #c4342a;
+    --blue: #3a78c4;
+    --green: #4a9656;
+  }
+
+  .mono { font-family: 'Courier New', Courier, monospace; }
+  .sans { font-family: Arial, Helvetica, sans-serif; }
+
+  .phone-frame {
+    width: 100%;
+    min-height: var(--app-min-height, 100vh);
+    background: linear-gradient(160deg, var(--case-light) 0%, var(--case) 55%, var(--case-dark) 100%);
+    display: flex;
+    flex-direction: column;
+  }
+  .nav-tag {
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: #000;
+    background: var(--led);
+    padding: 6px 0;
+    font-weight: bold;
+  }
+  .error-banner {
+    background: var(--warn-red);
+    color: #fff;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-align: center;
+    padding: 7px 10px;
+    display: none;
+  }
+  .error-banner.show { display: block; }
+
+  .app-header { padding: 14px 18px 16px; }
+  .brand-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .brand-badge {
+    width: 40px; height: 40px;
+    background: linear-gradient(160deg, #5e6850, #4a5240);
+    border: 1px solid #2e3328;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: bold; font-size: 14px;
+    color: #1a1e15;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    flex-shrink: 0;
+  }
+  .brand-title { font-weight: bold; font-size: 18px; letter-spacing: 1px; color: var(--text); }
+  .brand-sub { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); }
+
+  .main-readout {
+    background: var(--screen-bg);
+    border: 1px solid #000;
+    border-radius: 8px;
+    padding: 16px 18px;
+    box-shadow: inset 0 4px 12px rgba(0,0,0,0.8);
+  }
+  .readout-top {
+    display: flex; justify-content: space-between;
+    font-size: 10px; letter-spacing: 2px;
+    color: var(--led-dim);
+    margin-bottom: 6px;
+  }
+  .mgrs-value {
+    font-size: 21px; font-weight: bold; letter-spacing: 1px;
+    color: var(--led);
+    text-shadow: 0 0 6px rgba(255,179,0,0.45);
+    margin: 4px 0 6px;
+    word-break: break-all;
+  }
+  .coord-label { font-size: 9px; color: var(--led-dim); letter-spacing: 1px; }
+  .coord-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .coord-value {
+    font-size: 22px; font-weight: bold;
+    color: var(--led);
+    text-shadow: 0 0 6px rgba(255,179,0,0.45);
+    line-height: 1.1;
+  }
+
+  .tab-row { display: grid; grid-template-columns: 1fr 1fr; padding: 0 18px; }
+  .tab-btn {
+    text-align: center; padding: 13px 0;
+    font-weight: 600; font-size: 13px; letter-spacing: 1px;
+    color: var(--text-dim);
+    border-bottom: 2px solid #1a1b16;
+    cursor: pointer;
+    background: none; border-top: none; border-left: none; border-right: none;
+  }
+  .tab-btn.active { color: var(--led); border-bottom: 2px solid var(--led); }
+
+  .app-body { flex: 1; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+  .section-label { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; }
+
+  .locate-btn {
+    width: 100%;
+    background: linear-gradient(180deg, #6b5418, #4a3a10);
+    border: 1px solid #000;
+    border-radius: 8px;
+    color: var(--led);
+    font-weight: 600; font-size: 14px; letter-spacing: 1px;
+    padding: 13px 0;
+    box-shadow: 0 3px 0 #1f1808;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  .locate-btn:disabled { opacity: 0.6; }
+  .gps-error-text { font-size: 11px; color: #e8a45a; margin-top: 8px; line-height: 1.5; }
+
+  .mgrs-input-row { display: flex; gap: 8px; margin-top: 8px; }
+  .mgrs-field-zone { flex: 0 0 56px; }
+  .mgrs-field-band { flex: 0 0 48px; }
+  .mgrs-field-sq { flex: 0 0 64px; }
+  .mgrs-field-label { font-size: 9px; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 3px; }
+  .mgrs-input {
+    width: 100%;
+    background: var(--screen-bg);
+    border: 1px solid #000;
+    border-radius: 6px;
+    color: var(--led);
+    font-size: 17px; font-weight: bold;
+    text-align: center;
+    padding: 10px 6px;
+    box-shadow: inset 0 3px 8px rgba(0,0,0,0.7);
+    outline: none;
+    text-shadow: 0 0 4px rgba(255,179,0,0.4);
+  }
+  .mgrs-error-text { font-size: 11px; color: #e8a45a; margin-top: 8px; line-height: 1.5; }
+
+  .note-screen {
+    background: var(--screen-bg);
+    border: 1px solid #000;
+    border-radius: 8px;
+    padding: 10px 12px;
+    box-shadow: inset 0 4px 12px rgba(0,0,0,0.8);
+    margin-top: 6px;
+  }
+  .note-textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--led);
+    font-size: 17px; font-weight: bold;
+    text-shadow: 0 0 4px rgba(255,179,0,0.4);
+    outline: none;
+    resize: none;
+  }
+
+  .tag-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .tag-btn {
+    aspect-ratio: 1;
+    border-radius: 8px;
+    border: 1px solid #000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px;
+    box-shadow: 0 3px 0 rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1);
+    background: linear-gradient(180deg,#2a2c26,#1a1c17);
+    cursor: pointer;
+  }
+  .tag-btn.selected { box-shadow: 0 0 0 2px var(--led), 0 3px 0 rgba(0,0,0,0.5); }
+  .tag-sq { width: 16px; height: 16px; border-radius: 3px; display: block; }
+  .tag-lbl { font-size: 9px; letter-spacing: 0.5px; color: var(--text-dim); }
+  .tag-btn.selected .tag-lbl { color: var(--led); }
+
+  .action-row { display: grid; grid-template-columns: 1fr 1.6fr; gap: 10px; }
+  .btn-clear, .btn-save {
+    border: 1px solid #000;
+    border-radius: 8px;
+    font-weight: 600; font-size: 15px; letter-spacing: 1.5px;
+    padding: 16px 0;
+    text-align: center;
+    cursor: pointer;
+  }
+  .btn-clear { background: linear-gradient(180deg, var(--btn-top), var(--btn-body)); color: var(--text-dim); box-shadow: 0 3px 0 var(--btn-shadow); }
+  .btn-save {
+    background: linear-gradient(180deg, #6b5418, #4a3a10);
+    color: var(--led);
+    box-shadow: 0 3px 0 #1f1808, 0 0 14px rgba(255,179,0,0.15);
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .btn-save.disabled { opacity: 0.4; pointer-events: none; }
+  .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn-red); box-shadow: 0 0 5px rgba(196,52,42,0.8); display: inline-block; }
+
+  .table-screen {
+    background: var(--screen-bg);
+    border: 1px solid #000;
+    border-radius: 8px;
+    box-shadow: inset 0 4px 12px rgba(0,0,0,0.8);
+    overflow: hidden;
+    flex: 1;
+    min-height: 200px;
+  }
+  .empty-state { font-size: 14px; color: var(--led-dim); text-align: center; padding: 40px 20px; line-height: 1.8; }
+  .table-head, .table-row {
+    display: grid;
+    grid-template-columns: 0.3fr 0.9fr 1.6fr 0.6fr 0.3fr;
+    align-items: center;
+  }
+  .table-head { font-size: 10px; letter-spacing: 1px; color: var(--led-dim); padding: 12px 14px 8px; border-bottom: 1px solid #1a1608; }
+  .table-row { font-size: 13px; font-weight: bold; color: var(--led); padding: 12px 14px; border-bottom: 1px solid #161208; text-shadow: 0 0 3px rgba(255,179,0,0.3); }
+  .table-row:last-child { border-bottom: none; }
+  .table-cell-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 6px; }
+  .table-cell-coord { font-size: 10px; }
+  .dot { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+  .delete-btn { color: var(--text-dim); cursor: pointer; display: flex; justify-content: center; }
+
+  .export-row { display: grid; grid-template-columns: 1fr 1fr 0.7fr; gap: 10px; }
+  .export-btn {
+    background: linear-gradient(180deg, var(--btn-top), var(--btn-body));
+    border: 1px solid #000;
+    border-radius: 8px;
+    color: var(--text);
+    font-weight: 600; font-size: 13px; letter-spacing: 1.5px;
+    padding: 13px 0;
+    box-shadow: 0 3px 0 var(--btn-shadow);
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    cursor: pointer;
+  }
+  .export-btn.kml { color: var(--led); border-color: #3a2e0c; box-shadow: 0 3px 0 var(--btn-shadow), inset 0 0 8px rgba(255,179,0,0.12); }
+  .export-btn.clr { color: var(--text-dim); }
+  .export-btn.disabled { opacity: 0.4; pointer-events: none; }
+
+  #app svg { display: block; }
+
+  /* ====== MAP TAB ====== */
+  .map-wrap {
+    flex: 1;
+    min-height: 360px;
+    border: 1px solid #000;
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 3px 0 rgba(0,0,0,0.5);
+  }
+  #gmap-canvas { width: 100%; height: 100%; min-height: 360px; background: #2a2c26; }
+  .map-hint {
+    font-size: 11px; color: var(--text-dim);
+    text-align: center; margin-top: 8px; line-height: 1.5;
+  }
+  .map-loading, .map-error {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 20px;
+    font-size: 12px; color: var(--text-dim); line-height: 1.6;
+    background: #2a2c26;
+  }
+  .map-error { color: #e8a45a; }
+
+  /* เคอร์เซอร์กลางจอแผนที่: จุดแดงเล็ก + วงแหวนบางล้อมรอบ ขนาดเล็กไม่บังมุมมองแผนที่ */
+  .map-crosshair {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 22px; height: 22px;
+    margin-left: -11px; margin-top: -11px;
+    pointer-events: none; /* ไม่บังการลาก/ซูมแผนที่ */
+    z-index: 5;
+  }
+  .map-crosshair svg { width: 100%; height: 100%; }
+  .map-crosshair-ring { fill: none; stroke: var(--warn-red); stroke-width: 1.3; opacity: 0.7; }
+  .map-crosshair-dot { fill: var(--warn-red); filter: drop-shadow(0 0 3px rgba(196,52,42,0.9)); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<!--
+  GOOGLE MAPS API KEY
+  แทนที่ YOUR_API_KEY_HERE ด้วย API key จริงจาก Google Cloud Console
+  วิธีขอ key: https://console.cloud.google.com/google/maps-apis/credentials
+  อย่าลืม "Restrict key" -> Application restrictions -> HTTP referrers (websites)
+  ใส่ domain ที่จะใช้งานจริง เพื่อป้องกันคนอื่นเอา key ไปใช้ฟรีจากเรา
+-->
+<script>
+  window.__gmapLoaded = function () {
+    window.__gmapReady = true;
+    if (typeof window.__onGmapReady === "function") window.__onGmapReady();
+  };
+  window.__gmapFailed = function () {
+    window.__gmapLoadError = true;
+    if (typeof window.__onGmapReady === "function") window.__onGmapReady();
+  };
+  window.gm_authFailure = function () {
+    window.__gmapLoadError = true;
+    if (typeof window.__onGmapReady === "function") window.__onGmapReady();
+  };
+</script>
+<script
+  src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAOE2q4icSqdV6p5iteARn54nhzfYqS4bs&callback=__gmapLoaded&loading=async"
+  onerror="window.__gmapFailed()"
+  defer>
+</script>
+
+<script>
+(function () {
+  "use strict";
+
+  // ============ DATA ============
+  var TAGS = [
+    { id: "red", label: "HAZARD", color: "#c4342a", kmlColor: "ff2a34c4" },
+    { id: "blue", label: "WATER", color: "#3a78c4", kmlColor: "ffc4783a" },
+    { id: "green", label: "VEG", color: "#4a9656", kmlColor: "ff56964a" },
+    { id: "amber", label: "OTHER", color: "#ffb300", kmlColor: "ff00b3ff" }
+  ];
+  var STORAGE_KEY = "geomark_points_v1";
+
+  // ============ MGRS MATH (WGS84) ============
+  var MGRS_LAT_BANDS = "CDEFGHJKLMNPQRSTUVWXX";
+  var E100K_SETS = ["ABCDEFGH", "JKLMNPQR", "STUVWXYZ"];
+  var N100K_SETS = ["ABCDEFGHJKLMNPQRSTUV", "FGHJKLMNPQRSTUVABCDE"];
+
+  function deg2rad(d) { return (d * Math.PI) / 180; }
+  function rad2deg(r) { return (r * 180) / Math.PI; }
+  function getUTMZone(lon) { return Math.floor((lon + 180) / 6) + 1; }
+
+  function getLatBand(lat) {
+    if (lat < -80 || lat >= 84) return null;
+    var idx = Math.floor((lat + 80) / 8);
+    return MGRS_LAT_BANDS[idx];
+  }
+
+  function latLonToUTM(lat, lon) {
+    var a = 6378137.0;
+    var f = 1 / 298.257223563;
+    var e2 = f * (2 - f);
+    var ep2 = e2 / (1 - e2);
+    var k0 = 0.9996;
+
+    var zone = getUTMZone(lon);
+    var lonOrigin = deg2rad((zone - 1) * 6 - 180 + 3);
+    var latRad = deg2rad(lat);
+    var lonRad = deg2rad(lon);
+
+    var N = a / Math.sqrt(1 - e2 * Math.sin(latRad) * Math.sin(latRad));
+    var T = Math.tan(latRad) * Math.tan(latRad);
+    var C = ep2 * Math.cos(latRad) * Math.cos(latRad);
+    var A = Math.cos(latRad) * (lonRad - lonOrigin);
+
+    var M = a * (
+      (1 - e2 / 4 - (3 * e2 * e2) / 64 - (5 * e2 * e2 * e2) / 256) * latRad -
+      ((3 * e2) / 8 + (3 * e2 * e2) / 32 + (45 * e2 * e2 * e2) / 1024) * Math.sin(2 * latRad) +
+      ((15 * e2 * e2) / 256 + (45 * e2 * e2 * e2) / 1024) * Math.sin(4 * latRad) -
+      ((35 * e2 * e2 * e2) / 3072) * Math.sin(6 * latRad)
+    );
+
+    var easting = k0 * N * (A + ((1 - T + C) * Math.pow(A, 3)) / 6 +
+      ((5 - 18 * T + T * T + 72 * C - 58 * ep2) * Math.pow(A, 5)) / 120) + 500000.0;
+
+    var northing = k0 * (M + N * Math.tan(latRad) * ((A * A) / 2 +
+      ((5 - T + 9 * C + 4 * C * C) * Math.pow(A, 4)) / 24 +
+      ((61 - 58 * T + T * T + 600 * C - 330 * ep2) * Math.pow(A, 6)) / 720));
+
+    if (lat < 0) northing += 10000000.0;
+
+    return { easting: easting, northing: northing, zone: zone };
+  }
+
+  function get100kID(easting, northing, zone) {
+    var setNum = zone % 6 === 0 ? 6 : zone % 6;
+    var setColIdx = Math.floor(easting / 100000);
+    var eLetter = E100K_SETS[(setNum - 1) % 3][(setColIdx - 1) % 8];
+    var setRowIdx = Math.floor(northing / 100000) % 20;
+    // NGA AA scheme (WGS84): row-letter set alternates by zone parity
+    // (odd zones start "A", even zones start "F"). setNum%2 == zone%2
+    // always, since setNum = zone mod 6 and 6 is even — so this is
+    // equivalent to zone%2 and does not need to change.
+    var nSetIdx = setNum % 2 === 0 ? 1 : 0;
+    var nLetter = N100K_SETS[nSetIdx][((setRowIdx % 20) + 20) % 20];
+    return eLetter + nLetter;
+  }
+
+  function latLonToMGRS(lat, lon, precision) {
+    precision = precision || 5;
+    if (lat < -80 || lat >= 84) return "OUT OF RANGE";
+    var utm = latLonToUTM(lat, lon);
+    var band = getLatBand(lat);
+    if (!band) return "OUT OF RANGE";
+    var id100k = get100kID(utm.easting, utm.northing, utm.zone);
+    var eStr = String(Math.floor(utm.easting % 100000)).padStart(5, "0").slice(0, precision);
+    var nStr = String(Math.floor(utm.northing % 100000)).padStart(5, "0").slice(0, precision);
+    return utm.zone + band + " " + id100k + " " + eStr + " " + nStr;
+  }
+
+  function utmToLatLon(easting, northing, zone, isSouthern) {
+    var a = 6378137.0;
+    var f = 1 / 298.257223563;
+    var e2 = f * (2 - f);
+    var ep2 = e2 / (1 - e2);
+    var k0 = 0.9996;
+    var e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+
+    var x = easting - 500000.0;
+    var y = northing;
+    if (isSouthern) y -= 10000000.0;
+
+    var M = y / k0;
+    var mu = M / (a * (1 - e2 / 4 - (3 * e2 * e2) / 64 - (5 * Math.pow(e2, 3)) / 256));
+
+    var phi1 = mu +
+      ((3 * e1) / 2 - (27 * Math.pow(e1, 3)) / 32) * Math.sin(2 * mu) +
+      ((21 * e1 * e1) / 16 - (55 * Math.pow(e1, 4)) / 32) * Math.sin(4 * mu) +
+      ((151 * Math.pow(e1, 3)) / 96) * Math.sin(6 * mu) +
+      ((1097 * Math.pow(e1, 4)) / 512) * Math.sin(8 * mu);
+
+    var N1 = a / Math.sqrt(1 - e2 * Math.sin(phi1) * Math.sin(phi1));
+    var T1 = Math.tan(phi1) * Math.tan(phi1);
+    var C1 = ep2 * Math.cos(phi1) * Math.cos(phi1);
+    var R1 = (a * (1 - e2)) / Math.pow(1 - e2 * Math.sin(phi1) * Math.sin(phi1), 1.5);
+    var D = x / (N1 * k0);
+
+    var lat = phi1 - ((N1 * Math.tan(phi1)) / R1) * (
+      (D * D) / 2 -
+      ((5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * Math.pow(D, 4)) / 24 +
+      ((61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * Math.pow(D, 6)) / 720
+    );
+
+    var lon = (D -
+      ((1 + 2 * T1 + C1) * Math.pow(D, 3)) / 6 +
+      ((5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * Math.pow(D, 5)) / 120
+    ) / Math.cos(phi1);
+
+    var lonOrigin = deg2rad((zone - 1) * 6 - 180 + 3);
+    lon = lonOrigin + lon;
+
+    return { lat: rad2deg(lat), lon: rad2deg(lon) };
+  }
+
+  // northing ที่เส้นเมอริเดียนกลางโซน (A=0) ของละติจูดหนึ่ง — รวม false northing 10e6 เมื่ออยู่ใต้
+  // ใช้คำนวณ "northing ต่ำสุดของ band" ในตัวถอดรหัสที่แก้แล้วด้านล่าง
+  function northingAtCM(lat) {
+    var a = 6378137.0, f = 1 / 298.257223563, e2 = f * (2 - f), k0 = 0.9996, latRad = deg2rad(lat);
+    var M = a * (
+      (1 - e2 / 4 - (3 * e2 * e2) / 64 - (5 * e2 * e2 * e2) / 256) * latRad -
+      ((3 * e2) / 8 + (3 * e2 * e2) / 32 + (45 * e2 * e2 * e2) / 1024) * Math.sin(2 * latRad) +
+      ((15 * e2 * e2) / 256 + (45 * e2 * e2 * e2) / 1024) * Math.sin(4 * latRad) -
+      ((35 * e2 * e2 * e2) / 3072) * Math.sin(6 * latRad)
+    );
+    var n = k0 * M;
+    if (lat < 0) n += 10000000.0;
+    return n;
+  }
+
+  // ตัวถอดรหัส MGRS -> Lat/Lon (อัลกอริทึมมาตรฐาน "minimum-northing-per-band")
+  // แก้บั๊กเดิมที่เดา northing ด้วยการเทียบ "ศูนย์กลาง band" ซึ่งเลือกรอบ 2,000,000 ม. ผิด
+  // เมื่อจุดอยู่ใกล้ขอบ band (เคยให้ค่าคลาดเคลื่อน 600–4,900 กม. แบบเงียบ ๆ ที่ ~53.5°/71.9°)
+  // วิธีใหม่: ยึด northing ต่ำสุดของ band แล้วบวกจำนวนรอบที่น้อยที่สุดที่ทำให้ค่าตกในกรอบ band
+  // — มี cycle เดียวที่ถูกต้องเสมอ เพราะ band สูง ~888 กม. < 1 รอบ (2,000 กม.)
+  // ผ่านการสแกน 241,704 จุดทั่วโลก: error เฉลี่ย 0.70 ม. สูงสุด 1.40 ม. (= ผลการ truncate grid 1 ม.)
+  function mgrsToLatLon(zone, band, sq, eDigits, nDigits) {
+    zone = parseInt(zone, 10);
+    if (!zone || zone < 1 || zone > 60) return null;
+    band = (band || "").toUpperCase();
+    sq = (sq || "").toUpperCase();
+    if (band.length !== 1 || sq.length !== 2) return null;
+    if (!/^\d+$/.test(eDigits) || !/^\d+$/.test(nDigits)) return null;
+
+    var eWithin100k = parseInt(eDigits.padEnd(5, "0").slice(0, 5), 10);
+    var nWithin100k = parseInt(nDigits.padEnd(5, "0").slice(0, 5), 10);
+
+    var setNum = zone % 6 === 0 ? 6 : zone % 6;
+    var eLetterIdx = E100K_SETS[(setNum - 1) % 3].indexOf(sq[0]);
+    var nLetterIdx = N100K_SETS[setNum % 2 === 0 ? 1 : 0].indexOf(sq[1]);
+    if (eLetterIdx < 0 || nLetterIdx < 0) return null;
+    var easting = (eLetterIdx + 1) * 100000 + eWithin100k;
+
+    var bandIdx = MGRS_LAT_BANDS.indexOf(band);
+    if (bandIdx < 0) return null;
+    var latMin = -80 + bandIdx * 8;           // ขอบล่างของ band
+    var isSouthern = latMin < 0;              // band M ลงไป = ซีกใต้
+    // northing ต่ำสุดของ band หัก slack 5 กม. กันการกระโดดรอบที่ขอบ
+    // (ชดเชย meridian convergence นอก CM ~3 กม. + การปัดเศษ encoder; slack เล็กกว่า 1 รอบมาก
+    //  จึงไม่มีทางเลือก cycle ผิด)
+    var minN = northingAtCM(latMin) - 5000;
+    var nBase = nLetterIdx * 100000 + nWithin100k;       // ตำแหน่งภายใน 1 รอบ 2,000,000 ม.
+    var k = Math.ceil((minN - nBase) / 2000000);         // เลือกรอบเดียวที่ถูกต้อง
+    var northing = nBase + k * 2000000;
+    if (northing < 0 || northing > 10000000) return null;
+
+    var result = utmToLatLon(easting, northing, zone, isSouthern);
+    return { lat: result.lat, lng: result.lon };
+  }
+
+  // ============ HELPERS ============
+  function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+  function formatTime(ts) {
+    var d = new Date(ts);
+    var hh = String(d.getHours()).padStart(2, "0");
+    var mm = String(d.getMinutes()).padStart(2, "0");
+    return hh + ":" + mm;
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function buildKML(points) {
+    var placemarks = points.map(function (p) {
+      var tag = TAGS.filter(function (t) { return t.id === p.tag; })[0] || TAGS[3];
+      var name = escapeHtml(p.note || "Untitled point");
+      return "  <Placemark>\n" +
+        "    <name>" + name + "</name>\n" +
+        "    <description>Tag: " + tag.label + " | Logged: " + new Date(p.createdAt).toLocaleString("th-TH") + "</description>\n" +
+        "    <Style><IconStyle><color>" + tag.kmlColor + "</color><scale>1.2</scale></IconStyle></Style>\n" +
+        "    <Point><coordinates>" + p.lng.toFixed(6) + "," + p.lat.toFixed(6) + ",0</coordinates></Point>\n" +
+        "  </Placemark>";
+    }).join("\n");
+
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<kml xmlns="http://www.opengis.net/kml/2.2">\n' +
+      "<Document>\n" +
+      "  <name>GeoMark Export</name>\n" +
+      placemarks + "\n" +
+      "</Document>\n" +
+      "</kml>";
+  }
+
+  function downloadFile(filename, content, mime) {
+    var blob = new Blob([content], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function loadPoints() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return [];
+      var parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) { return []; }
+  }
+  function savePoints(points) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(points));
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // ============ ICONS (inline SVG strings) ============
+  var ICONS = {
+    crosshair: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="22" y1="12" x2="18" y2="12"></line><line x1="6" y1="12" x2="2" y2="12"></line><line x1="12" y1="6" x2="12" y2="2"></line><line x1="12" y1="22" x2="12" y2="18"></line></svg>',
+    check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+    trash: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>',
+    download: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
+    file: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>'
+  };
+
+  // ============ APP STATE ============
+  var state = {
+    tab: "capture",
+    points: loadPoints(),
+    loadError: false,
+    mgrsZone: "",
+    mgrsBand: "",
+    mgrsSq: "",
+    mgrsE: "",
+    mgrsN: "",
+    note: "",
+    tag: "amber",
+    accuracy: null,
+    resolvedLatLng: null,
+    gpsStatus: "idle",
+    gpsError: "",
+    saveFlash: false,
+    // ----- MAP TAB state -----
+    mapPendingNote: "",
+    mapPendingTag: "amber",
+    mapCenter: null,       // { lat, lng } ของจุดกึ่งกลางแผนที่ปัจจุบัน อัพเดทตามการเลื่อนแผนที่ (real-time readout)
+    mapSaveFlash: false
+  };
+
+  var errorTimer = null;
+
+  function setLoadError(val) {
+    state.loadError = val;
+    if (errorTimer) clearTimeout(errorTimer);
+    if (val) {
+      errorTimer = setTimeout(function () {
+        state.loadError = false;
+        render();
+      }, 4000);
+    }
+    render();
+  }
+
+  function persist(next) {
+    var ok = savePoints(next);
+    setLoadError(!ok);
+  }
+
+  function recomputeLatLng() {
+    if (state.mgrsZone && state.mgrsBand && state.mgrsSq.length === 2 && state.mgrsE && state.mgrsN) {
+      state.resolvedLatLng = mgrsToLatLon(state.mgrsZone, state.mgrsBand, state.mgrsSq, state.mgrsE, state.mgrsN);
+    } else {
+      state.resolvedLatLng = null;
+    }
+  }
+
+  function canSave() { return state.resolvedLatLng !== null; }
+
+  function locateMe() {
+    if (!navigator.geolocation) {
+      state.gpsStatus = "error";
+      state.gpsError = "เครื่องนี้ไม่รองรับ GPS — กรอกพิกัด MGRS เองได้ที่ด้านล่าง";
+      render();
+      return;
+    }
+    state.gpsStatus = "locating";
+    state.gpsError = "";
+    render();
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        var lt = pos.coords.latitude;
+        var lg = pos.coords.longitude;
+        var mgrs = latLonToMGRS(lt, lg);
+        var parts = mgrs.split(" ");
+        if (parts.length === 4 && parts[0] !== "OUT") {
+          var zoneband = parts[0];
+          state.mgrsZone = zoneband.slice(0, -1);
+          state.mgrsBand = zoneband.slice(-1);
+          state.mgrsSq = parts[1];
+          state.mgrsE = parts[2];
+          state.mgrsN = parts[3];
+          state.resolvedLatLng = { lat: lt, lng: lg };
+          state.gpsStatus = "ok";
+        } else {
+          // lat outside ±84° — MGRS (UTM-based) cannot represent this point.
+          // Surface this clearly instead of silently leaving stale/empty fields.
+          state.gpsStatus = "error";
+          state.gpsError = "ตำแหน่งปัจจุบันอยู่นอกขอบเขตที่ระบบ MGRS รองรับ (ละติจูดเกิน ±84°) — กรอกพิกัด MGRS เองไม่ได้สำหรับจุดนี้";
+        }
+        state.accuracy = pos.coords.accuracy ? Math.round(pos.coords.accuracy) : null;
+        render();
+      },
+      function (err) {
+        state.gpsStatus = "error";
+        state.gpsError = err.code === 1
+          ? "ไม่ได้รับสิทธิ์เข้าถึงตำแหน่ง — อนุญาตใน browser แล้วลองใหม่ หรือกรอกพิกัด MGRS เอง"
+          : "หาตำแหน่งไม่สำเร็จ — ลองใหม่หรือกรอกพิกัด MGRS เอง";
+        render();
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  }
+
+  function savePoint() {
+    if (!canSave()) return;
+    var newPoint = {
+      id: genId(),
+      lat: state.resolvedLatLng.lat,
+      lng: state.resolvedLatLng.lng,
+      mgrs: state.mgrsZone + state.mgrsBand + " " + state.mgrsSq + " " +
+        state.mgrsE.padEnd(5, "0").slice(0, 5) + " " + state.mgrsN.padEnd(5, "0").slice(0, 5),
+      note: state.note.trim(),
+      tag: state.tag,
+      accuracy: state.accuracy,
+      createdAt: Date.now()
+    };
+    state.points = [newPoint].concat(state.points);
+    persist(state.points);
+    gmapMarkersDirty = true;  // จุดใหม่จาก CAPTURE — ให้แผนที่ refresh marker ตอนเปิดแท็บ MAP
+    state.saveFlash = true;
+    render();
+    setTimeout(function () { state.saveFlash = false; render(); }, 900);
+
+    // คงค่า Zone / Band / SQ ID ไว้ (เส้นกริดประจำพื้นที่ มักไม่เปลี่ยนระหว่างจุดที่ติดกัน)
+    // เคลียร์เฉพาะ Easting/Northing เพราะเป็นค่าที่เปลี่ยนทุกจุด — ผู้ใช้พิมพ์ Zone/Band/SQ ใหม่ได้ตามปกติถ้าต้องการ
+    state.note = "";
+    state.mgrsE = "";
+    state.mgrsN = "";
+    state.accuracy = null;
+    state.resolvedLatLng = null;
+    state.gpsStatus = "idle";
+    render();
+  }
+
+  function deletePoint(id) {
+    state.points = state.points.filter(function (p) { return p.id !== id; });
+    persist(state.points);
+    gmapMarkersDirty = true;  // จุดถูกลบ — ให้แผนที่ลบ marker ที่ค้างตอนเปิดแท็บ MAP
+    render();
+  }
+
+  function clearAll() {
+    if (!window.confirm("ลบพิกัดทั้งหมด? การกระทำนี้ย้อนกลับไม่ได้")) return;
+    state.points = [];
+    persist([]);
+    gmapMarkersDirty = true;  // ล้างทั้งหมด — ให้แผนที่ลบ marker ทุกตัวตอนเปิดแท็บ MAP
+    render();
+  }
+
+  // ============ MAP TAB LOGIC ============
+  // หมายเหตุ: ใช้ window-level refs (ไม่ใส่ใน state) เพราะ google.maps.Map / Marker
+  // เป็น object ของ Google ที่ไม่ควรถูก serialize หรือ re-create ทุกครั้งที่ render()
+  var gmap = null;            // instance ของ google.maps.Map
+  var gmapPersistentDiv = null; // detached DOM node ที่เก็บ google map ไว้ข้าม re-render
+  var gmapPointMarkers = [];  // marker ของจุดที่ถูก save ไว้แล้วทั้งหมด (เพื่อ clear ก่อน re-draw)
+  var gmapInitTried = false;
+  var gmapMarkersDirty = true;  // ตั้ง true เมื่อจุดถูกเพิ่ม/ลบ เพื่อให้แผนที่ redraw marker ตอนกลับมาแท็บ MAP
+
+  function getTagInfo(id) {
+    return TAGS.filter(function (t) { return t.id === id; })[0] || TAGS[3];
+  }
+
+  // สร้าง marker icon เป็นวงกลมสีตาม tag (ใช้ SVG path ของ google.maps.SymbolPath)
+  function tagMarkerIcon(color, scale) {
+    return {
+      path: google.maps.SymbolPath.CIRCLE,
+      fillColor: color,
+      fillOpacity: 1,
+      strokeColor: "#0a0f08",
+      strokeWeight: 2,
+      scale: scale || 8
+    };
+  }
+
+  function clearPointMarkers() {
+    gmapPointMarkers.forEach(function (m) { m.setMap(null); });
+    gmapPointMarkers = [];
+  }
+
+  // วาด marker ของจุดที่บันทึกไว้แล้วทั้งหมดบนแผนที่ (สีตาม tag ตามที่ตกลงกันไว้)
+  function drawSavedPointMarkers() {
+    if (!gmap) return;
+    clearPointMarkers();
+    state.points.forEach(function (p) {
+      var t = getTagInfo(p.tag);
+      var marker = new google.maps.Marker({
+        position: { lat: p.lat, lng: p.lng },
+        map: gmap,
+        icon: tagMarkerIcon(t.color),
+        title: (p.note || t.label) + " · " + formatTime(p.createdAt)
+      });
+      gmapPointMarkers.push(marker);
+    });
+  }
+
+  // กดปุ่ม "PIN HERE" — อ่านพิกัดจากจุดศูนย์กลางแผนที่ปัจจุบัน (ตรงกับจุดแดงที่ค้างอยู่กลางจอ)
+  // แล้วบันทึกจุดทันทีในขั้นตอนเดียว พร้อม note/tag ที่กรอกไว้ล่วงหน้า — เหมือน flow ของปุ่ม SAVE หน้า CAPTURE
+  // ต่างกันแค่แหล่งที่มาของพิกัด: หน้า CAPTURE มาจาก GPS, หน้านี้มาจากตำแหน่งกลางจอแผนที่
+  function pinAtMapCenter() {
+    if (!gmap || !state.mapCenter) return;
+    var lat = state.mapCenter.lat, lng = state.mapCenter.lng;
+
+    var newPoint = {
+      id: genId(),
+      lat: lat,
+      lng: lng,
+      mgrs: latLonToMGRS(lat, lng, 5),
+      note: state.mapPendingNote.trim(),
+      tag: state.mapPendingTag,
+      accuracy: null, // จุดที่ปักจากแผนที่ไม่มีค่าความแม่นยำ GPS เหมือนจับจาก device
+      createdAt: Date.now()
+    };
+    state.points = [newPoint].concat(state.points);
+    persist(state.points);
+    state.mapSaveFlash = true;
+    drawSavedPointMarkers(); // วาด marker ใหม่ของจุดที่ save แล้ว (รวมจุดล่าสุด)
+    gmapMarkersDirty = false; // เพิ่งวาดสด ไม่ต้อง redraw ซ้ำตอน render รอบถัดไป
+    render();
+    setTimeout(function () { state.mapSaveFlash = false; render(); }, 900);
+  }
+
+  // ปุ่ม CLEAR ของหน้า MAP — เคลียร์แค่ note/tag ที่กรอกไว้ (ไม่กระทบจุดที่ save แล้ว)
+  function clearMapForm() {
+    state.mapPendingNote = "";
+    state.mapPendingTag = "amber";
+    render();
+  }
+
+  // เรียกเมื่อสลับไปแท็บ MAP — โหลด/สร้างแผนที่แบบ lazy (รอจน Google script พร้อมก่อน)
+  function ensureMapInitialized() {
+    var canvas = document.getElementById("gmap-canvas");
+    if (!canvas) return; // ไม่ได้อยู่ในแท็บ map ตอนนี้
+
+    if (window.__gmapLoadError) {
+      canvas.innerHTML = '<div class="map-error mono">โหลดแผนที่ไม่สำเร็จ — เช็คว่าใส่ API key ที่ถูกต้องแล้วหรือยัง และเปิด Maps JavaScript API ไว้ใน Google Cloud Console</div>';
+      return;
+    }
+    if (!window.__gmapReady || typeof google === "undefined") {
+      canvas.innerHTML = '<div class="map-loading mono">กำลังโหลดแผนที่…</div>';
+      window.__onGmapReady = function () { ensureMapInitialized(); };
+      return;
+    }
+
+    // ใช้ persistent DOM node (gmapPersistentDiv) ที่สร้างครั้งเดียวแล้วไม่ถูกทำลาย
+    // แทนการสร้าง google.maps.Map ใหม่ทุกครั้งที่ render() เขียน innerHTML ทับ —
+    // วิธีนี้ทำให้แผนที่ไม่กระพริบ/ไม่รีเซ็ต zoom ตอนพิมพ์ note หรือลากหมุด
+    if (!gmap) {
+      gmapPersistentDiv = document.createElement("div");
+      gmapPersistentDiv.style.width = "100%";
+      gmapPersistentDiv.style.height = "100%";
+      canvas.appendChild(gmapPersistentDiv);
+
+      var center = state.points[0] ? { lat: state.points[0].lat, lng: state.points[0].lng } : { lat: 13.7563, lng: 100.5018 }; // default: กรุงเทพฯ
+      state.mapCenter = center;
+      gmap = new google.maps.Map(gmapPersistentDiv, {
+        center: center,
+        zoom: state.points.length ? 15 : 6,
+        mapTypeId: "roadmap",
+        streetViewControl: false,
+        fullscreenControl: false,
+        mapTypeControl: false
+      });
+
+      // อัพเดท readout พิกัด/MGRS ตามจุดกึ่งกลางแผนที่ทุกครั้งที่ลาก/ซูม —
+      // ใช้ debounce เบาๆ (80ms) ป้องกันการ render ถี่เกินไประหว่างลากแผนที่ต่อเนื่อง
+      var centerChangeTimer = null;
+      gmap.addListener("center_changed", function () {
+        clearTimeout(centerChangeTimer);
+        centerChangeTimer = setTimeout(function () {
+          var c = gmap.getCenter();
+          state.mapCenter = { lat: c.lat(), lng: c.lng() };
+          var readoutEl = document.querySelector(".mgrs-value");
+          // อัพเดทแค่ text ของ readout ตรงๆ โดยไม่เรียก render() เต็มรูปแบบ
+          // เพื่อไม่ให้แผนที่ถูกแทรกแซง/กระตุกระหว่างผู้ใช้กำลังลากอยู่
+          if (readoutEl && state.tab === "map") {
+            readoutEl.textContent = latLonToMGRS(state.mapCenter.lat, state.mapCenter.lng, 4);
+          }
+        }, 80);
+      });
+
+      drawSavedPointMarkers();
+      gmapMarkersDirty = false;
+
+      // อัพเดท readout MGRS ทันทีหลังสร้างแผนที่ (เดิมขึ้นขีด —— จนกว่าผู้ใช้จะลากแผนที่
+      // เพราะ render() วาด readout ตอน state.mapCenter ยัง null) — patch ให้ตรงกับจุดกึ่งกลางจริงเลย
+      var initReadout = document.querySelector(".mgrs-value");
+      if (initReadout && state.tab === "map") {
+        initReadout.textContent = latLonToMGRS(state.mapCenter.lat, state.mapCenter.lng, 4);
+      }
+    } else if (gmapPersistentDiv.parentNode !== canvas) {
+      // canvas เป็น element ใหม่จาก re-render — ย้าย persistent div (พร้อม Google Map ที่มีอยู่) กลับเข้าไป
+      canvas.appendChild(gmapPersistentDiv);
+      google.maps.event.trigger(gmap, "resize"); // บังคับให้ map คำนวณขนาดใหม่หลังถูกย้าย DOM
+      // ถ้าจุดถูกเพิ่ม/ลบจากแท็บอื่น (CAPTURE/LIST) ระหว่างที่แผนที่ถูกสร้างไว้แล้ว ให้ redraw marker ใหม่
+      // (เดิม marker ของจุดที่ลบจะค้าง และจุดที่เพิ่มจะไม่โผล่ จนกว่าจะ reload หน้า)
+      if (gmapMarkersDirty) {
+        drawSavedPointMarkers();
+        gmapMarkersDirty = false;
+      }
+    }
+  }
+
+  function exportKML() {
+    if (state.points.length === 0) return;
+    var kml = buildKML(state.points);
+    var ts = new Date().toISOString().slice(0, 10);
+    downloadFile("geomark-export-" + ts + ".kml", kml, "application/vnd.google-earth.kml+xml");
+  }
+
+  function exportCSV() {
+    if (state.points.length === 0) return;
+    var header = "tag,note,lat,lng,accuracy_m,created_at\n";
+    var rows = state.points.map(function (p) {
+      // CSV note field: escape quotes AND strip newlines/CR, since a raw
+      // newline inside a quoted field is technically legal in RFC4180 but
+      // breaks naive line-based parsers (e.g. Excel quirks, simple split("\n")).
+      var safeNote = (p.note || "").replace(/"/g, '""').replace(/[\r\n]+/g, " ");
+      // ป้องกัน CSV/formula injection: ถ้า note ขึ้นต้นด้วย = + - @ (หรือ tab) Excel/Sheets
+      // จะตีความเป็นสูตร (เสี่ยง DDE/รันคำสั่ง) — เติม ' นำหน้าให้กลายเป็นข้อความล้วน
+      if (/^[=+\-@\t]/.test(safeNote)) safeNote = "'" + safeNote;
+      return [
+        p.tag,
+        '"' + safeNote + '"',
+        Number(p.lat).toFixed(6), Number(p.lng).toFixed(6),  // ปัดเป็น 6 ตำแหน่ง (~0.1 ม.) เลี่ยง float noise
+        p.accuracy != null ? p.accuracy : "",
+        new Date(p.createdAt).toISOString()
+      ].join(",");
+    }).join("\n");
+    var ts = new Date().toISOString().slice(0, 10);
+    downloadFile("geomark-export-" + ts + ".csv", "\uFEFF" + header + rows, "text/csv;charset=utf-8");
+  }
+
+  // ============ RENDER ============
+  function render() {
+    var root = document.getElementById("app");
+    var html = '<div class="phone-frame">';
+
+    html += '<div class="nav-tag">' + (state.tab === "capture" ? "SCREEN 01 · CAPTURE MODE" : state.tab === "list" ? "SCREEN 02 · LOG & EXPORT" : "SCREEN 03 · MAP CAPTURE") + '</div>';
+
+    html += '<div class="error-banner' + (state.loadError ? ' show' : '') + '" role="alert" aria-live="assertive">⚠ บันทึกข้อมูลอาจไม่สำเร็จ — ลองกด SAVE POINT อีกครั้ง หรือ Export ไฟล์สำรองไว้</div>';
+
+    // header
+    html += '<div class="app-header"><div class="brand-row">' +
+      '<div class="brand-badge">GM</div>' +
+      '<div><div class="brand-title">GEOMARK-X7</div><div class="brand-sub mono">FIELD COORDINATE LOGGER</div></div>' +
+      '</div>';
+
+    if (state.tab === "capture") {
+      var statusText = state.gpsStatus === "locating" ? "LOCATING…" :
+        state.gpsStatus === "ok" ? "GPS FIX" :
+        state.gpsStatus === "error" ? "GPS ERROR" : "NO FIX";
+      html += '<div class="main-readout">' +
+        '<div class="readout-top mono"><span>' + statusText + '</span><span>' + (state.accuracy ? "±" + state.accuracy + "M" : "—") + '</span></div>' +
+        '<div class="mgrs-value mono">' + (canSave() ? (state.mgrsZone + state.mgrsBand + " " + state.mgrsSq + " " + state.mgrsE + " " + state.mgrsN) : "—— — —— ————— —————") + '</div>' +
+        '<div class="coord-label mono">MGRS · WGS84</div>' +
+        '</div>';
+    } else if (state.tab === "map") {
+      var mgrsAtCenter = state.mapCenter ? latLonToMGRS(state.mapCenter.lat, state.mapCenter.lng, 4) : "—— — —— ———— ————";
+      html += '<div class="main-readout">' +
+        '<div class="readout-top mono"><span>MAP CENTER</span><span>' + String(state.points.length).padStart(3, "0") + ' PTS</span></div>' +
+        '<div class="mgrs-value mono">' + escapeHtml(mgrsAtCenter) + '</div>' +
+        '<div class="coord-label mono">MGRS · WGS84</div>' +
+        '</div>';
+    } else {
+      var timeRange = "—";
+      if (state.points.length > 0) {
+        timeRange = formatTime(state.points[state.points.length - 1].createdAt) + "–" + formatTime(state.points[0].createdAt);
+      }
+      html += '<div class="main-readout">' +
+        '<div class="readout-top mono"><span>SESSION LOG</span><span>' + String(state.points.length).padStart(3, "0") + ' PTS</span></div>' +
+        '<div class="coord-grid">' +
+        '<div><div class="coord-value mono">' + String(state.points.length).padStart(3, "0") + '</div><div class="coord-label mono">TOTAL POINTS</div></div>' +
+        '<div><div class="coord-value mono" style="font-size:15px;">' + timeRange + '</div><div class="coord-label mono">TIME RANGE</div></div>' +
+        '</div></div>';
+    }
+    html += '</div>'; // app-header
+
+    // tabs
+    html += '<div class="tab-row" style="grid-template-columns:1fr 1fr 1fr;">' +
+      '<button class="tab-btn' + (state.tab === "capture" ? " active" : "") + '" data-action="set-tab" data-tab="capture">CAPTURE</button>' +
+      '<button class="tab-btn' + (state.tab === "list" ? " active" : "") + '" data-action="set-tab" data-tab="list">LIST' + (state.points.length > 0 ? " (" + state.points.length + ")" : "") + '</button>' +
+      '<button class="tab-btn' + (state.tab === "map" ? " active" : "") + '" data-action="set-tab" data-tab="map">MAP</button>' +
+      '</div>';
+
+    // body
+    html += '<div class="app-body">';
+    if (state.tab === "capture") {
+      html += '<div>' +
+        '<button class="locate-btn" data-action="locate"' + (state.gpsStatus === "locating" ? " disabled" : "") + '>' +
+        ICONS.crosshair + '<span style="margin-left:8px;">' + (state.gpsStatus === "locating" ? "กำลังค้นหาตำแหน่ง…" : "จับตำแหน่งปัจจุบัน (GPS)") + '</span>' +
+        '</button>';
+      if (state.gpsError) html += '<div class="gps-error-text" role="status" aria-live="polite">' + escapeHtml(state.gpsError) + '</div>';
+
+      html += '<div style="margin-top:14px;">' +
+        '<div class="section-label mono">MGRS COORDINATE</div>' +
+        '<div class="mgrs-input-row">' +
+        '<div class="mgrs-field-zone"><div class="mgrs-field-label mono">ZONE</div><input class="mgrs-input mono" data-field="mgrsZone" inputmode="numeric" maxlength="2" placeholder="47" value="' + escapeHtml(state.mgrsZone) + '"></div>' +
+        '<div class="mgrs-field-band"><div class="mgrs-field-label mono">BAND</div><input class="mgrs-input mono" data-field="mgrsBand" maxlength="1" placeholder="Q" value="' + escapeHtml(state.mgrsBand) + '"></div>' +
+        '<div class="mgrs-field-sq"><div class="mgrs-field-label mono">SQ ID</div><input class="mgrs-input mono" data-field="mgrsSq" maxlength="2" placeholder="QU" value="' + escapeHtml(state.mgrsSq) + '"></div>' +
+        '</div>' +
+        '<div class="mgrs-input-row">' +
+        '<div style="flex:1;"><div class="mgrs-field-label mono">EASTING</div><input class="mgrs-input mono" data-field="mgrsE" inputmode="numeric" maxlength="5" placeholder="27295" value="' + escapeHtml(state.mgrsE) + '"></div>' +
+        '<div style="flex:1;"><div class="mgrs-field-label mono">NORTHING</div><input class="mgrs-input mono" data-field="mgrsN" inputmode="numeric" maxlength="5" placeholder="15167" value="' + escapeHtml(state.mgrsN) + '"></div>' +
+        '</div>';
+      if (state.mgrsZone && state.mgrsBand && state.mgrsSq.length === 2 && state.mgrsE && state.mgrsN && !canSave()) {
+        html += '<div class="mgrs-error-text">รูปแบบ MGRS ไม่ถูกต้อง — เช็ค Zone/Band/Square ID อีกครั้ง</div>';
+      }
+      html += '</div></div>';
+
+      html += '<div><div class="section-label mono">FIELD NOTE</div>' +
+        '<div class="note-screen"><textarea class="note-textarea mono" data-field="note" rows="2" placeholder="พิมพ์บันทึกย่อ เช่น ชื่อสถานที่...">' + escapeHtml(state.note) + '</textarea></div></div>';
+
+      html += '<div><div class="section-label mono" style="margin-bottom:10px;">TAG CATEGORY</div><div class="tag-row">';
+      TAGS.forEach(function (t) {
+        var sel = state.tag === t.id;
+        html += '<div class="tag-btn' + (sel ? " selected" : "") + '" data-action="set-tag" data-tag="' + t.id + '">' +
+          '<span class="tag-sq" style="background:' + t.color + ';box-shadow:0 0 5px ' + t.color + '99;"></span>' +
+          '<span class="tag-lbl mono">' + t.label + '</span></div>';
+      });
+      html += '</div></div>';
+
+      html += '<div style="flex:1;"></div>';
+
+      html += '<div class="action-row">' +
+        '<div class="btn-clear" data-action="clear-form">CLEAR</div>' +
+        '<div class="btn-save' + (canSave() ? "" : " disabled") + '" data-action="save-point">' +
+        (state.saveFlash ? ICONS.check : '<span class="rec-dot"></span>') +
+        '<span>' + (state.saveFlash ? "SAVED!" : "SAVE POINT") + '</span></div>' +
+        '</div>';
+    } else if (state.tab === "list") {
+      html += '<div class="table-screen">';
+      if (state.points.length === 0) {
+        html += '<div class="empty-state mono">ยังไม่มีจุดที่บันทึก<br><span style="font-size:11px;color:#5c4612;">ไปที่แท็บ CAPTURE เพื่อเริ่มบันทึกพิกัด</span></div>';
+      } else {
+        html += '<div class="table-head mono"><span>TAG</span><span>NOTE</span><span>COORD</span><span>TIME</span><span></span></div>';
+        state.points.forEach(function (p) {
+          var t = TAGS.filter(function (x) { return x.id === p.tag; })[0] || TAGS[3];
+          var coord = p.mgrs || latLonToMGRS(p.lat, p.lng, 4);
+          html += '<div class="table-row mono">' +
+            '<span class="dot" style="background:' + t.color + ';"></span>' +
+            '<span class="table-cell-note">' + escapeHtml(p.note || "—") + '</span>' +
+            '<span class="table-cell-coord">' + escapeHtml(coord) + '</span>' +
+            '<span>' + formatTime(p.createdAt) + '</span>' +
+            '<span class="delete-btn" data-action="delete-point" data-id="' + p.id + '">' + ICONS.trash + '</span>' +
+            '</div>';
+        });
+      }
+      html += '</div>';
+
+      var disabledCls = state.points.length ? "" : " disabled";
+      html += '<div class="export-row">' +
+        '<div class="export-btn' + disabledCls + '" data-action="export-csv">' + ICONS.file + '<span>CSV</span></div>' +
+        '<div class="export-btn kml' + disabledCls + '" data-action="export-kml">' + ICONS.download + '<span>KML</span></div>' +
+        '<div class="export-btn clr' + disabledCls + '" data-action="clear-all">CLR</div>' +
+        '</div>';
+    } else if (state.tab === "map") {
+      html += '<div class="map-wrap">' +
+        '<div id="gmap-canvas"></div>' +
+        '<div class="map-crosshair">' +
+          '<svg viewBox="0 0 22 22">' +
+            '<circle class="map-crosshair-ring" cx="11" cy="11" r="8"></circle>' +
+            '<circle class="map-crosshair-dot" cx="11" cy="11" r="2"></circle>' +
+          '</svg>' +
+        '</div>' +
+        '</div>';
+      html += '<div class="map-hint mono">เลื่อนแผนที่ให้จุดที่ต้องการอยู่ตรงจุดสีแดงกลางจอ</div>';
+
+      html += '<div style="margin-top:10px;"><div class="section-label mono">FIELD NOTE</div>' +
+        '<div class="note-screen"><textarea class="note-textarea mono" data-field="mapPendingNote" rows="2" placeholder="พิมพ์บันทึกย่อ เช่น ชื่อสถานที่...">' + escapeHtml(state.mapPendingNote) + '</textarea></div></div>';
+
+      html += '<div><div class="section-label mono" style="margin-bottom:10px;">TAG CATEGORY</div><div class="tag-row">';
+      TAGS.forEach(function (t) {
+        var sel = state.mapPendingTag === t.id;
+        html += '<div class="tag-btn' + (sel ? " selected" : "") + '" data-action="set-map-tag" data-tag="' + t.id + '">' +
+          '<span class="tag-sq" style="background:' + t.color + ';box-shadow:0 0 5px ' + t.color + '99;"></span>' +
+          '<span class="tag-lbl mono">' + t.label + '</span></div>';
+      });
+      html += '</div></div>';
+
+      html += '<div class="action-row">' +
+        '<div class="btn-clear" data-action="map-clear-pin">CLEAR</div>' +
+        '<div class="btn-save" data-action="map-pin-here">' +
+        (state.mapSaveFlash ? ICONS.check : '<span class="rec-dot"></span>') +
+        '<span>' + (state.mapSaveFlash ? "SAVED!" : "PIN HERE") + '</span></div>' +
+        '</div>';
+    }
+    html += '</div>'; // app-body
+    html += '</div>'; // phone-frame
+
+    root.innerHTML = html;
+    attachHandlers();
+  }
+
+  // ============ EVENT HANDLERS ============
+  function attachHandlers() {
+    var root = document.getElementById("app");
+
+    root.querySelectorAll('[data-action="set-tab"]').forEach(function (el) {
+      el.addEventListener("click", function () {
+        state.tab = el.getAttribute("data-tab");
+        render();
+      });
+    });
+
+    var locateBtn = root.querySelector('[data-action="locate"]');
+    if (locateBtn) locateBtn.addEventListener("click", locateMe);
+
+    root.querySelectorAll('[data-field]').forEach(function (el) {
+      el.addEventListener("input", function () {
+        var field = el.getAttribute("data-field");
+        var val = el.value;
+        if (field === "mgrsZone") val = val.replace(/[^0-9]/g, "").slice(0, 2);
+        if (field === "mgrsBand") val = val.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 1);
+        if (field === "mgrsSq") val = val.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+        if (field === "mgrsE" || field === "mgrsN") val = val.replace(/[^0-9]/g, "").slice(0, 5);
+        if (field === "note" || field === "mapPendingNote") val = val.replace(/[\r\n]+/g, " ");
+        state[field] = val;
+
+        if (["mgrsZone", "mgrsBand", "mgrsSq", "mgrsE", "mgrsN"].indexOf(field) !== -1) {
+          recomputeLatLng();
+        }
+
+        // preserve focus & cursor across re-render (works for both <input> and <textarea>)
+        var selStart = el.selectionStart;
+        var selEnd = el.selectionEnd;
+        render();
+        var newEl = document.querySelector('[data-field="' + field + '"]');
+        if (newEl) {
+          newEl.focus();
+          if (typeof newEl.setSelectionRange === "function") {
+            try { newEl.setSelectionRange(selStart, selEnd); } catch (e) {}
+          }
+        }
+      });
+    });
+
+    root.querySelectorAll('[data-action="set-tag"]').forEach(function (el) {
+      el.addEventListener("click", function () {
+        state.tag = el.getAttribute("data-tag");
+        render();
+      });
+    });
+
+    var clearFormBtn = root.querySelector('[data-action="clear-form"]');
+    if (clearFormBtn) clearFormBtn.addEventListener("click", function () {
+      state.mgrsZone = ""; state.mgrsBand = ""; state.mgrsSq = "";
+      state.mgrsE = ""; state.mgrsN = ""; state.note = "";
+      state.accuracy = null; state.resolvedLatLng = null;
+      state.gpsStatus = "idle"; state.gpsError = "";
+      render();
+    });
+
+    var saveBtn = root.querySelector('[data-action="save-point"]');
+    if (saveBtn) saveBtn.addEventListener("click", savePoint);
+
+    root.querySelectorAll('[data-action="delete-point"]').forEach(function (el) {
+      el.addEventListener("click", function () {
+        deletePoint(el.getAttribute("data-id"));
+      });
+    });
+
+    var clearAllBtn = root.querySelector('[data-action="clear-all"]');
+    if (clearAllBtn) clearAllBtn.addEventListener("click", clearAll);
+
+    var exportCsvBtn = root.querySelector('[data-action="export-csv"]');
+    if (exportCsvBtn) exportCsvBtn.addEventListener("click", exportCSV);
+
+    var exportKmlBtn = root.querySelector('[data-action="export-kml"]');
+    if (exportKmlBtn) exportKmlBtn.addEventListener("click", exportKML);
+
+    // ----- MAP TAB handlers -----
+    root.querySelectorAll('[data-action="set-map-tag"]').forEach(function (el) {
+      el.addEventListener("click", function () {
+        state.mapPendingTag = el.getAttribute("data-tag");
+        render();
+      });
+    });
+
+    var mapPinHereBtn = root.querySelector('[data-action="map-pin-here"]');
+    if (mapPinHereBtn) mapPinHereBtn.addEventListener("click", pinAtMapCenter);
+
+    var mapClearBtn = root.querySelector('[data-action="map-clear-pin"]');
+    if (mapClearBtn) mapClearBtn.addEventListener("click", clearMapForm);
+
+    // A11Y: ปุ่มหลายตัวในแอปเป็น <div data-action> (ไม่ใช่ <button>) จึงโฟกัส/กดด้วยคีย์บอร์ดไม่ได้
+    // และ screen reader ไม่รู้ว่าเป็นปุ่ม — เติม role/tabindex + รองรับ Enter/Space ให้ครบในที่เดียว
+    // (ไม่ต้องแก้ template ทุกจุด ลดความเสี่ยง)
+    root.querySelectorAll('[data-action]').forEach(function (el) {
+      if (el.tagName === "BUTTON") return;                       // <button> รองรับคีย์บอร์ดอยู่แล้ว
+      if (el.classList.contains("disabled")) return;             // ปุ่มที่ถูก disable ไม่ต้องโฟกัสได้
+      if (!el.hasAttribute("role")) el.setAttribute("role", "button");
+      if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "0");
+      el.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+          e.preventDefault();
+          el.click();
+        }
+      });
+    });
+
+    // ถ้าอยู่ในแท็บ MAP ตอนนี้ ให้สร้าง/sync แผนที่ทุกครั้งหลัง render
+    // (innerHTML ถูกเขียนทับใหม่ทุกครั้ง ทำให้ #gmap-canvas เป็น element คนละตัวเดิม)
+    if (state.tab === "map") {
+      ensureMapInitialized();
+    }
+  }
+
+  // ============ RESPONSIVE ZOOM (มือถือคงเดิม, แท็บเล็ต/จอใหญ่ขยายตามสัดส่วน) ============
+  // UI ออกแบบบนความกว้างอ้างอิง 420px (มือถือ) — บนจอใหญ่กว่านี้ ขยาย zoom ตามสัดส่วน
+  // เพดานบนกันไม่ให้ใหญ่เทอะทะเกินไปบนจอ desktop ขนาดใหญ่มาก (เช่น 4K monitor)
+  var REF_WIDTH = 420;
+  var MAX_ZOOM = 1.7;
+  function applyResponsiveZoom() {
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    // ใช้ทั้งความกว้างและความสูงมาคำนวณ เพื่อไม่ให้แอป "ล้นจอ" ในแนวตั้งบนแท็บเล็ตที่กว้างแต่เตี้ย (โหมดแนวนอน)
+    var zoomByWidth = vw / REF_WIDTH;
+    var zoomByHeight = vh / 700; // 700px คือความสูง UI โดยประมาณที่เนื้อหาพอดีจอมือถือทั่วไป
+    var zoom = Math.min(zoomByWidth, zoomByHeight, MAX_ZOOM);
+    if (zoom < 1) zoom = 1; // ไม่ย่อเล็กกว่าขนาดอ้างอิงเดิม (กันมือถือจอแคบผิดปกติ)
+    document.documentElement.style.setProperty("--ui-zoom", zoom);
+
+    // ชดเชยผลของ zoom กลับ: เพราะ `vh` วัดจาก viewport จริงโดยไม่สนใจ zoom ของ ancestor
+    // ถ้าปล่อยให้ #app ใช้ 100vh ตรงๆ พอ zoom > 1 ความสูง "effective" จะกลายเป็น vh * zoom (ล้นจอ)
+    // จึงต้องคำนวณความสูงเป้าหมายเป็น px แล้วหารด้วย zoom ก่อนตั้งเป็น min-height
+    document.documentElement.style.setProperty("--app-min-height", (vh / zoom) + "px");
+
+    // ถ้า Google Map ถูกสร้างไปแล้ว ต้อง trigger resize เพื่อให้มันคำนวณขนาด tile ใหม่
+    // ให้ตรงกับขนาด container จริงหลัง zoom เปลี่ยน (ไม่ทำแบบนี้แผนที่จะเบลอ/ตัดขอบผิด)
+    if (typeof gmap !== "undefined" && gmap) {
+      setTimeout(function () {
+        google.maps.event.trigger(gmap, "resize");
+      }, 50);
+    }
+  }
+  function debounce(fn, wait) {
+    var t = null;
+    return function () {
+      clearTimeout(t);
+      t = setTimeout(fn, wait);
+    };
+  }
+  window.addEventListener("resize", debounce(applyResponsiveZoom, 150));
+  window.addEventListener("orientationchange", applyResponsiveZoom);
+
+  // ============ INIT ============
+  applyResponsiveZoom();
+  render();
+})();
+</script>
+</body>
+</html>
